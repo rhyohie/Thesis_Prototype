@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageOps
 
 APP_DIR = Path(__file__).parent
 IMGSZ = 640
@@ -122,9 +122,30 @@ def find_models():
 # ===========================================================================
 # Processing
 # ===========================================================================
-def detect(model, pil_image, conf, iou):
+def preprocess(pil_image, stretch=True):
+    """Bring an arbitrary photo into the form the network was trained on.
+
+    1. EXIF orientation correction. Phones record rotation as metadata rather than
+       rotating the pixels, so a portrait photo arrives sideways without this.
+    2. RGB channel order.
+    3. Geometry. The training set was built by stretching every image to 640x640,
+       which does not preserve aspect ratio. Ultralytics letterboxes by default
+       (preserves aspect ratio, pads with grey), so leaving this to the runtime would
+       feed the model a geometry it never saw in training. stretch=True reproduces the
+       training preprocessing exactly.
+
+    Channel order and scaling from 0-255 to 0-1 are handled by the inference runtime.
+    """
+    img = ImageOps.exif_transpose(pil_image).convert("RGB")
+    if stretch:
+        img = img.resize((IMGSZ, IMGSZ))
+    return img
+
+
+def detect(model, pil_image, conf, iou, stretch=True):
+    prepared = preprocess(pil_image, stretch=stretch)
     t0 = time.perf_counter()
-    results = model.predict(pil_image, imgsz=IMGSZ, conf=conf, iou=iou, verbose=False)
+    results = model.predict(prepared, imgsz=IMGSZ, conf=conf, iou=iou, verbose=False)
     elapsed_ms = (time.perf_counter() - t0) * 1000
     r = results[0]
 
@@ -194,10 +215,19 @@ with st.sidebar:
                 key="second")
 
     st.header("Detection settings")
-    conf = st.slider("Confidence threshold", 0.05, 0.95, 0.25, 0.05,
-                     help="Minimum score for a detection to be shown.")
+    conf = st.slider("Confidence threshold", 0.05, 0.95, 0.15, 0.05,
+                     help="Minimum score for a detection to be shown. Defaults to 0.15 "
+                          "because TFLite conversion shifted confidence scores slightly "
+                          "downward relative to the PyTorch model.")
     iou = st.slider("NMS IoU threshold", 0.1, 0.9, 0.45, 0.05,
                     help="Overlap above which two boxes are treated as the same pod.")
+
+    st.header("Preprocessing")
+    stretch = st.checkbox(
+        "Stretch to 640x640 (matches training)", value=True,
+        help="On: reproduces how the training set was built, distorting aspect ratio. "
+             "Off: the runtime letterboxes instead, preserving aspect ratio but feeding "
+             "the model a geometry it did not see in training. Try both on real photos.")
 
     st.divider()
     st.caption(f"Input size {IMGSZ}x{IMGSZ}. Classes: {', '.join(CLASS_NAMES)}.")
@@ -230,10 +260,13 @@ st.subheader("2. Processing")
 with st.spinner("Running detection..."):
     try:
         model = load_model(model_path)
-        annotated, detections, ms = detect(model, image, conf, iou)
+        annotated, detections, ms = detect(model, image, conf, iou, stretch)
     except Exception as e:
         st.error(f"Inference failed: {type(e).__name__}: {e}")
         st.stop()
+geom = "stretched to 640x640" if stretch else "letterboxed to 640x640"
+st.write(f"Preprocessing: EXIF orientation corrected, converted to RGB, {geom}, "
+         f"then scaled to [0, 1] by the inference runtime.")
 st.write(f"Model `{Path(model_path).name}` ran in **{ms:.0f} ms** "
          f"and returned {len(detections)} detection(s) above {conf:.0%} confidence.")
 
@@ -242,7 +275,7 @@ st.subheader("3. Output")
 if compare:
     other_path = models[other]
     with st.spinner("Running the second model..."):
-        annotated2, detections2, ms2 = detect(load_model(other_path), image, conf, iou)
+        annotated2, detections2, ms2 = detect(load_model(other_path), image, conf, iou, stretch)
     c1, c2 = st.columns(2)
     with c1:
         st.markdown(f"**{choice}**")
@@ -255,8 +288,9 @@ if compare:
 else:
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("**Original**")
-        st.image(image, use_container_width=True)
+        st.markdown("**Input as fed to the model**")
+        st.image(preprocess(image, stretch), use_container_width=True)
+        st.caption("After EXIF correction and resizing. This is what the network sees.")
     with c2:
         st.markdown("**Detected**")
         st.image(annotated, use_container_width=True)
