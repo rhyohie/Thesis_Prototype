@@ -6,9 +6,9 @@ The previous version of this repository was a four-class YOLO detector. Its `.tf
 
 ## Current status
 
-The new Kaggle export has been installed locally. Both model files passed SHA-256 checks against `model_manifest.json`, and their saved split signatures match. The two `.tflite` files are in `models/` and ignored by Git; the manifest is ready to commit.
+The new Kaggle export has been installed locally. Both model files passed SHA-256 checks against `model_manifest.json`, and their saved split signatures match. The two `.tflite` files are in `models/` and ignored by Git; the manifest is committed.
 
-**Model quality warning:** Both saved runs predicted `healthy` for all 441 held-out test images. Each scored 75.96% accuracy because 335 of those images were healthy, but **Black Pod Rot recall and Pod Borer recall were both 0%**. CBAM did not improve these held-out predictions. The app displays this warning and must not be presented as reliable disease identification. The live site has not been changed or tested with these exports.
+**Model quality warning:** Both saved runs predicted `healthy` for all 441 held-out test images. Each scored 75.96% accuracy because 335 of those images were healthy, but **Black Pod Rot recall and Pod Borer recall were both 0%**. CBAM did not improve these held-out predictions. The app displays this warning and must not be presented as reliable disease identification. A successful inference on the deployed site still needs to be checked with a real image before the showcase.
 
 | Saved model | Test accuracy | Macro F1 | Healthy recall | Black Pod Rot recall | Pod Borer recall |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -16,6 +16,13 @@ The new Kaggle export has been installed locally. Both model files passed SHA-25
 | VGG + CBAM | 75.96% | 0.288 | 100% | 0% | 0% |
 
 These are the metrics in the exported manifest, based on the held-out test set, not predictions made by this web app.
+
+## Showcase input
+
+1. Open the deployed app on the laptop or phone you will use. Have one clear cacao pod photo saved on that device as a backup.
+2. Under **01 / Input photograph**, choose **Upload** and select that photo, or choose **Camera**, allow browser camera access, and take a photo. The camera belongs to the device opening the app, not the server.
+3. Check the 224 × 224 preview, then click **Compare models**. The first run may take longer while the app downloads and loads both model files. Verify this entire flow before the presentation.
+4. Explain the two predictions as research outputs. Both saved models predicted Healthy for every held-out test image, so the site must not be presented as a reliable disease diagnosis.
 
 ## Repeat the export after future retraining
 
@@ -69,7 +76,7 @@ The old `.tflite` files should be removed from the new Git commit. If `git statu
 - Classes in order: `healthy`, `black_pod_rot`, `pod_borer`.
 - Input: EXIF orientation correction, RGB conversion, 224 × 224 bilinear resize, float32 values divided by 255.
 - Both models: 2–2–2–3–2 convolutions, five max-pooling layers, Flatten, Dense 4096 / Dense 4096 / Dense 3, random seeded initialization.
-- CBAM model: channel then spatial attention after each pool; reduction ratio 16 and spatial kernel 7, as stated in the defended ACM paper.
+- CBAM model: channel then spatial attention after each pool; reduction ratio 16 and spatial kernel 7 in the trained notebook. Singh et al.'s cited CBAM-VGG16 study specifies a reduction ratio of 8, so this trained model is not an exact copy of that CBAM setting. Changing the ratio requires retraining and a new export.
 - Training runs: the same prepared 3072 / 877 / 441 train / validation / test split, seed 42, Adamax at learning rate 0.1, batch size 64, 100 epochs, final-epoch weights. No augmentation, ImageNet weights, class weights, dropout, L2, or early stopping in the paper-parameter profile.
 - The app is image classification only. It does not draw detection boxes or give a field diagnosis.
 

@@ -67,6 +67,7 @@ body,p,button,label{font-family:'DM Sans',sans-serif}
 .warning-note{padding:1rem 1.1rem;border-left:3px solid #ff8058;background:#211a1a;color:#e5c5bb;border-radius:3px;margin:1.2rem 0}
 .footer-note{color:#748f98;font-size:.78rem;border-top:1px solid #25404a;padding-top:1rem;margin-top:2.2rem}
 .table-scroll{overflow-x:auto;border:1px solid #28424b;border-radius:8px;background:#0b171d}
+.class-table-block{padding-bottom:1.4rem}
 .metrics-table{border-collapse:collapse;width:100%;min-width:650px;color:#cfdee2;font-size:.83rem}
 .metrics-table th,.metrics-table td{padding:.82rem 1rem;border-bottom:1px solid #263a43;text-align:left;white-space:nowrap}
 .metrics-table th{font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.09em;color:#80a6b0;font-size:.62rem;background:#11232b}
@@ -171,6 +172,7 @@ with input_col:
         uploaded = st.file_uploader("Choose a cacao pod photo", type=["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"])
     else:
         uploaded = st.camera_input("Take a cacao pod photo")
+        st.caption("Uses this device's camera. Allow camera access if your browser asks.")
 
 image = prepared = None
 if uploaded is not None:
@@ -255,7 +257,7 @@ if manifest is not None:
                     "Specificity": f"{float(row['specificity_percent']):.1f}%",
                     "F1": f"{float(row['f1_score']):.3f}",
                 } for row in item["class_metrics"]]
-                st.markdown(render_table(class_rows), unsafe_allow_html=True)
+                st.markdown(f'<div class="class-table-block">{render_table(class_rows)}</div>', unsafe_allow_html=True)
     else:
         st.caption("Held-out metrics will appear after both Kaggle runs are exported.")
 
