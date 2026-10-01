@@ -1,348 +1,262 @@
-"""
-Cacao Pod Disease and Pest Detection - Prototype
-================================================
-Thesis: An Improved YOLOv8-CBAM Object Detection Model for Cacao Black Pod Diseases
-        and Pest Identification
+"""Streamlit prototype for the paired three-class ACM cacao models."""
 
-Demonstrates the Input -> Processing -> Output pipeline using the TensorFlow Lite
-model exported in Notebook 4.
+from __future__ import annotations
 
-SETUP
------
-    pip install streamlit ultralytics pillow
-    streamlit run app.py
-
-Put the .tflite files from tflite_export/ in the same folder as this file.
-The app finds them automatically.
-
-WHY ULTRALYTICS AND NOT THE RAW TFLITE INTERPRETER
---------------------------------------------------
-A YOLOv8 TFLite model outputs a raw tensor with no boxes in it: you have to transpose
-it, threshold it, run non-maximum suppression and rescale the coordinates yourself.
-Ultralytics' YOLO class loads the same .tflite file and does all of that correctly.
-The model running here is still the exported TFLite artifact, which is the thing the
-paper claims. Writing the post-processing by hand would add bugs, not credibility.
-"""
-
+import hashlib
+import html
 import io
-import json
 import time
-from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
-from PIL import Image, ImageOps
+from PIL import Image, UnidentifiedImageError
 
-APP_DIR = Path(__file__).parent
-IMGSZ = 640
-
-CLASS_NAMES = ["HEALTHY", "BLACKPOD", "PODBORER", "MIRID"]
-
-DISPLAY_NAMES = {
-    "HEALTHY": "Healthy pod",
-    "BLACKPOD": "Black Pod Rot",
-    "PODBORER": "Cacao Pod Borer",
-    "MIRID": "Mirid Bug damage",
-}
-
-# ---------------------------------------------------------------------------
-# REPLACE THIS TEXT WITH RECOMMENDATIONS FROM A CITED SOURCE.
-# The wording below reflects commonly published practice, but your paper must cite
-# an authority your panel will accept: the Philippine Coconut Authority, the
-# Department of Agriculture, or a peer-reviewed reference. Do not present these as
-# findings of your study. Put the citation in the SOURCE field so it shows in the UI.
-# ---------------------------------------------------------------------------
-ADVICE = {
-    "HEALTHY": {
-        "status": "No disease or pest damage detected",
-        "actions": [
-            "Continue routine monitoring on a weekly schedule.",
-            "Maintain canopy pruning and field sanitation.",
-        ],
-        "source": "[ADD CITATION]",
-    },
-    "BLACKPOD": {
-        "status": "Black Pod Rot (Phytophthora palmivora) indicators detected",
-        "actions": [
-            "Remove infected pods and bury or burn them away from the plot.",
-            "Prune to improve airflow and reduce canopy humidity.",
-            "Harvest ripe pods frequently so inoculum does not build up.",
-            "Apply a copper-based fungicide following label rates if incidence is high.",
-        ],
-        "source": "[ADD CITATION]",
-    },
-    "PODBORER": {
-        "status": "Cacao Pod Borer (Conopomorpha cramerella) damage detected",
-        "actions": [
-            "Harvest completely and frequently to break the life cycle.",
-            "Sleeve young pods with plastic sleeves where practical.",
-            "Bury pod husks immediately after breaking.",
-            "Prune to reduce shade and remove alternate hosts nearby.",
-        ],
-        "source": "[ADD CITATION]",
-    },
-    "MIRID": {
-        "status": "Mirid Bug (Helopeltis spp.) damage detected",
-        "actions": [
-            "Maintain adequate shade, as mirid pressure rises in exposed canopies.",
-            "Prune affected branches and remove chupons.",
-            "Inspect flush growth regularly, since mirids feed on young tissue.",
-            "Apply a recommended insecticide only if damage passes the action threshold.",
-        ],
-        "source": "[ADD CITATION]",
-    },
-}
+from model_runtime import (
+    CLASS_NAMES,
+    DISPLAY_NAMES,
+    ModelArtifactError,
+    load_manifest,
+    load_runtime,
+    prepare_image,
+    resolve_model_file,
+)
 
 
-# ===========================================================================
-# Model loading
-# ===========================================================================
-@st.cache_resource(show_spinner=False)
-def load_model(path: str):
-    from ultralytics import YOLO
-    return YOLO(path)
+APP_DIR = Path(__file__).resolve().parent
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+ARM_LABELS = {"baseline": "VGG baseline", "cbam": "VGG + CBAM"}
+ARM_COLORS = {"baseline": "#1ac8ed", "cbam": "#ff8058"}
+
+st.set_page_config(
+    page_title="Cacao Pod | Model Comparison", page_icon="🌱", layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500;600&family=DM+Serif+Display&display=swap');
+html,body,[data-testid="stAppViewContainer"]{background:#071116;color:#e8f3f5}
+[data-testid="stAppViewContainer"]{background-image:linear-gradient(rgba(83,129,143,.10) 1px,transparent 1px),linear-gradient(90deg,rgba(83,129,143,.10) 1px,transparent 1px);background-size:48px 48px}
+[data-testid="stHeader"],[data-testid="stToolbar"]{background:transparent}
+[data-testid="stMainBlockContainer"]{max-width:1300px;padding-top:2.2rem}
+body,p,button,label{font-family:'DM Sans',sans-serif}
+.eyebrow,.section-label,.small-label,.pill,.method-step,.card-kicker,.card-chip,.card-foot{font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.12em}
+.eyebrow{color:#87a0a9;font-size:.68rem;margin-bottom:.7rem}
+.hero-title{font-family:'DM Serif Display',Georgia,serif;color:#eef8f9;font-size:clamp(2.7rem,5vw,5.5rem);line-height:1.03;margin:0 0 .7rem}
+.hero-title .accent{color:#1ac8ed}.hero-copy{color:#a6bac0;max-width:750px;font-size:1.05rem;line-height:1.55}
+.hero-rule{height:1px;background:#25404a;margin:1.7rem 0 1.3rem}
+.pills{display:flex;flex-wrap:wrap;gap:.55rem;margin:.95rem 0 1.55rem}
+.pill{border:1px solid #27424b;color:#a9c1c7;border-radius:4px;padding:.45rem .65rem;background:#0b1a20;font-size:.62rem}
+.section-label{color:#b3cbd0;font-size:.73rem;margin:1.45rem 0 .72rem}
+.method-bar{display:flex;flex-wrap:wrap;gap:.45rem;margin:1.15rem 0 1.45rem}
+.method-step{background:#0c1c22;border:1px solid #25404a;color:#9db7be;padding:.55rem .66rem;border-radius:4px;font-size:.62rem}
+.method-arrow{color:#4a7380;align-self:center}
+.prediction-card{background:#0b171d;border:1px solid #28424b;border-radius:9px;overflow:hidden;min-height:355px;margin-top:.55rem}
+.prediction-card.baseline{border-top:2px solid #1ac8ed}.prediction-card.cbam{border-top:2px solid #ff8058}
+.card-head{padding:1.02rem 1.2rem;border-bottom:1px solid #263a43;display:flex;justify-content:space-between;align-items:center}
+.card-kicker{color:#afc7cd;font-size:.67rem}.card-chip{border-radius:3px;padding:.25rem .44rem;font-size:.64rem;border:1px solid currentColor}
+.baseline .card-chip,.baseline .top-score{color:#1ac8ed}.cbam .card-chip,.cbam .top-score{color:#ff8058}
+.card-body{padding:1.38rem 1.2rem 1.5rem}.small-label{color:#68828b;font-size:.64rem;margin-bottom:.45rem}
+.top-class{font-family:'DM Serif Display',Georgia,serif;font-size:2.1rem;line-height:1.15;color:#f0f7f8;min-height:2.5rem}
+.top-score{font-family:'DM Mono',monospace;font-size:1.48rem;font-weight:600;margin:.2rem 0 1.25rem}
+.prob-row{display:grid;grid-template-columns:112px 1fr 55px;gap:.65rem;align-items:center;margin:.78rem 0;font-size:.75rem;color:#adbec3}
+.prob-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.prob-track{height:7px;border-radius:10px;background:#21343c;overflow:hidden}.prob-fill{height:100%;border-radius:10px}.prob-value{font-family:'DM Mono',monospace;text-align:right}
+.card-foot{border-top:1px solid #263a43;padding:.78rem 1.2rem;font-size:.61rem;color:#79939a}
+.empty-card{color:#6e8a93;min-height:220px;display:flex;align-items:center;justify-content:center;font-family:'DM Mono',monospace;font-size:.76rem}
+.comparison-note{padding:1rem 1.1rem;border-left:3px solid #2bc8e8;background:#0d2028;color:#c3d7db;border-radius:3px;margin:1.35rem 0}
+.warning-note{padding:1rem 1.1rem;border-left:3px solid #ff8058;background:#211a1a;color:#e5c5bb;border-radius:3px;margin:1.2rem 0}
+.footer-note{color:#748f98;font-size:.78rem;border-top:1px solid #25404a;padding-top:1rem;margin-top:2.2rem}
+.table-scroll{overflow-x:auto;border:1px solid #28424b;border-radius:8px;background:#0b171d}
+.metrics-table{border-collapse:collapse;width:100%;min-width:650px;color:#cfdee2;font-size:.83rem}
+.metrics-table th,.metrics-table td{padding:.82rem 1rem;border-bottom:1px solid #263a43;text-align:left;white-space:nowrap}
+.metrics-table th{font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.09em;color:#80a6b0;font-size:.62rem;background:#11232b}
+.metrics-table tr:last-child td{border-bottom:0}
+[data-testid="stFileUploader"],[data-testid="stCameraInput"]{background:#0b171d;border:1px solid #28424b;border-radius:8px;padding:.65rem}
+div.stButton>button[kind="primary"]{background:#17c5e8;color:#001016;border:0;font-weight:700;border-radius:5px;padding:.7rem 1.35rem}
+div.stButton>button[kind="primary"]:hover{background:#5fe0f6;color:#001016}
+@media(max-width:680px){.hero-title{font-size:2.8rem}.prob-row{grid-template-columns:93px 1fr 52px}}
+</style>
+""", unsafe_allow_html=True)
 
 
-def find_models():
-    """Return {label: path} for every .tflite and .pt next to this file."""
-    found = {}
-    for p in sorted(APP_DIR.glob("*.tflite")) + sorted(APP_DIR.glob("*.pt")):
-        name = p.stem
-        tag = "CBAM" if "cbam" in name.lower() else "Baseline"
-        fmt = "TFLite" if p.suffix == ".tflite" else "PyTorch"
-        prec = ""
-        if "float16" in name:
-            prec = " FP16"
-        elif "float32" in name:
-            prec = " FP32"
-        found[f"{tag} ({fmt}{prec})"] = str(p)
-    return found
+def read_upload(uploaded) -> Image.Image:
+    payload = uploaded.getvalue()
+    if len(payload) > MAX_UPLOAD_BYTES:
+        raise ValueError("Choose an image smaller than 20 MB.")
+    try:
+        with Image.open(io.BytesIO(payload)) as candidate:
+            candidate.verify()
+        image = Image.open(io.BytesIO(payload))
+        image.load()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ValueError("This file could not be read as an image.") from exc
+    return image
 
 
-# ===========================================================================
-# Processing
-# ===========================================================================
-def preprocess(pil_image, stretch=True):
-    """Bring an arbitrary photo into the form the network was trained on.
-
-    1. EXIF orientation correction. Phones record rotation as metadata rather than
-       rotating the pixels, so a portrait photo arrives sideways without this.
-    2. RGB channel order.
-    3. Geometry. The training set was built by stretching every image to 640x640,
-       which does not preserve aspect ratio. Ultralytics letterboxes by default
-       (preserves aspect ratio, pads with grey), so leaving this to the runtime would
-       feed the model a geometry it never saw in training. stretch=True reproduces the
-       training preprocessing exactly.
-
-    Channel order and scaling from 0-255 to 0-1 are handled by the inference runtime.
-    """
-    img = ImageOps.exif_transpose(pil_image).convert("RGB")
-    if stretch:
-        img = img.resize((IMGSZ, IMGSZ))
-    return img
-
-
-def detect(model, pil_image, conf, iou, stretch=True):
-    prepared = preprocess(pil_image, stretch=stretch)
-    t0 = time.perf_counter()
-    results = model.predict(prepared, imgsz=IMGSZ, conf=conf, iou=iou, verbose=False)
-    elapsed_ms = (time.perf_counter() - t0) * 1000
-    r = results[0]
-
-    detections = []
-    for box in r.boxes:
-        cid = int(box.cls[0])
-        detections.append({
-            "class_id": cid,
-            "class": CLASS_NAMES[cid] if cid < len(CLASS_NAMES) else str(cid),
-            "confidence": float(box.conf[0]),
-            "xyxy": [round(float(v), 1) for v in box.xyxy[0].tolist()],
-        })
-    detections.sort(key=lambda d: d["confidence"], reverse=True)
-
-    annotated = Image.fromarray(r.plot()[:, :, ::-1])   # BGR to RGB
-    return annotated, detections, elapsed_ms
-
-
-def summarise(detections):
-    if not detections:
-        return "No pods detected.", []
-    counts = {}
-    for d in detections:
-        counts[d["class"]] = counts.get(d["class"], 0) + 1
-    parts = []
-    for cls, n in sorted(counts.items(), key=lambda kv: -kv[1]):
-        best = max(d["confidence"] for d in detections if d["class"] == cls)
-        parts.append(f"{DISPLAY_NAMES.get(cls, cls)}: {n} region(s), "
-                     f"highest confidence {best:.0%}")
-    return " | ".join(parts), sorted(counts, key=lambda c: -counts[c])
-
-
-# ===========================================================================
-# UI
-# ===========================================================================
-st.set_page_config(page_title="Cacao Pod Detection Prototype",
-                   page_icon="*", layout="wide")
-
-st.title("Cacao Pod Disease and Pest Detection")
-st.caption("Prototype demonstrating the trained YOLOv8 detection model exported to "
-           "TensorFlow Lite. Research prototype, not a diagnostic tool.")
-
-models = find_models()
-if not models:
-    st.error(
-        "No model files found. Put the exported `.tflite` files (or a `.pt` checkpoint) "
-        "in the same folder as `app.py`, then reload this page."
+def prediction_card(arm: str, result: dict | None) -> str:
+    label = ARM_LABELS[arm]
+    if result is None:
+        body = '<div class="empty-card">AWAITING IMAGE + MODEL</div>'
+        foot = "Same image · Same preprocessing · Three classes"
+    else:
+        index = int(result["best_index"])
+        scores = result["probabilities"]
+        color = ARM_COLORS[arm]
+        bars = "".join(
+            '<div class="prob-row">'
+            f'<div class="prob-name">{html.escape(DISPLAY_NAMES[name])}</div>'
+            f'<div class="prob-track"><div class="prob-fill" style="width:{float(score)*100:.2f}%;background:{color}"></div></div>'
+            f'<div class="prob-value">{float(score)*100:.1f}%</div></div>'
+            for name, score in zip(CLASS_NAMES, scores)
+        )
+        body = (
+            '<div class="card-body"><div class="small-label">Predicted class</div>'
+            f'<div class="top-class">{html.escape(DISPLAY_NAMES[CLASS_NAMES[index]])}</div>'
+            f'<div class="top-score">{float(scores[index])*100:.1f}%</div>{bars}</div>'
+        )
+        foot = f"Inference {float(result['elapsed_ms']):.0f} ms · image-level prediction"
+    return (
+        f'<div class="prediction-card {arm}"><div class="card-head">'
+        f'<span class="card-kicker">{html.escape(label)}</span>'
+        f'<span class="card-chip">{"READY" if result else "PENDING"}</span></div>'
+        f'{body}<div class="card-foot">{foot}</div></div>'
     )
-    st.stop()
 
-with st.sidebar:
-    st.header("Model")
-    choice = st.selectbox("Detection model", list(models.keys()))
-    model_path = models[choice]
-    st.caption(f"`{Path(model_path).name}`")
 
-    compare = False
-    if len(models) > 1:
-        compare = st.checkbox(
-            "Compare two models side by side",
-            help="Runs the same image through both so the difference is visible "
-                 "rather than described.")
-        if compare:
-            other = st.selectbox(
-                "Second model",
-                [k for k in models if k != choice],
-                key="second")
+def render_table(rows: list[dict]) -> str:
+    if not rows:
+        return ""
+    columns = list(rows[0])
+    header = "".join(f"<th>{html.escape(str(column))}</th>" for column in columns)
+    body = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(str(row[column]))}</td>" for column in columns) + "</tr>"
+        for row in rows
+    )
+    return f'<div class="table-scroll"><table class="metrics-table"><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>'
 
-    st.header("Detection settings")
-    conf = st.slider("Confidence threshold", 0.05, 0.95, 0.15, 0.05,
-                     help="Minimum score for a detection to be shown. Defaults to 0.15 "
-                          "because TFLite conversion shifted confidence scores slightly "
-                          "downward relative to the PyTorch model.")
-    iou = st.slider("NMS IoU threshold", 0.1, 0.9, 0.45, 0.05,
-                    help="Overlap above which two boxes are treated as the same pod.")
 
-    st.header("Preprocessing")
-    stretch = st.checkbox(
-        "Stretch to 640x640 (matches training)", value=True,
-        help="On: reproduces how the training set was built, distorting aspect ratio. "
-             "Off: the runtime letterboxes instead, preserving aspect ratio but feeding "
-             "the model a geometry it did not see in training. Try both on real photos.")
+@st.cache_resource(show_spinner=False)
+def cached_runtime(arm: str, path: str, digest: str):
+    return load_runtime(Path(path), digest)
 
-    st.divider()
-    st.caption(f"Input size {IMGSZ}x{IMGSZ}. Classes: {', '.join(CLASS_NAMES)}.")
 
-# ---------------- INPUT ----------------
-st.subheader("1. Input")
-tab_upload, tab_camera = st.tabs(["Upload an image", "Use the camera"])
-with tab_upload:
-    uploaded = st.file_uploader("Choose a cacao pod image",
-                                type=["jpg", "jpeg", "png", "bmp", "webp"])
-with tab_camera:
-    captured = st.camera_input("Take a photo")
-
-source = uploaded or captured
-if source is None:
-    st.info("Upload or capture an image to begin.")
-    st.stop()
+st.markdown('<div class="eyebrow">Research prototype / paired model comparison</div>', unsafe_allow_html=True)
+st.markdown('<h1 class="hero-title"><span class="accent">Cacao</span> Pod Classifier</h1>', unsafe_allow_html=True)
+st.markdown('<p class="hero-copy">One cacao pod photo, two trained models. Compare the baseline VGG reconstruction with its CBAM-modified counterpart on the same image.</p>', unsafe_allow_html=True)
+st.markdown('<div class="pills"><span class="pill">3 image-level classes</span><span class="pill">224 × 224 RGB</span><span class="pill">matched preprocessing</span></div><div class="hero-rule"></div>', unsafe_allow_html=True)
 
 try:
-    image = Image.open(io.BytesIO(source.getvalue())).convert("RGB")
-except Exception as e:
-    st.error(f"Could not read that file: {e}")
-    st.stop()
+    manifest = load_manifest(APP_DIR / "model_manifest.json")
+except ModelArtifactError as exc:
+    st.error(f"Model metadata is invalid: {exc}")
+    manifest = None
 
-st.write(f"Input accepted: {image.width} x {image.height} pixels, "
-         f"{len(source.getvalue())/1024:.0f} KB")
+if manifest is not None:
+    matrices = [manifest["models"][arm].get("test_metrics", {}).get("confusion_matrix")
+                for arm in ("baseline", "cbam")]
+    if all(isinstance(matrix, list) and len(matrix) == 3
+           and all(len(row) == 3 and row[1] == 0 and row[2] == 0 for row in matrix)
+           for matrix in matrices):
+        st.warning(
+            "Held-out test finding: both saved models predicted Healthy for every test image. "
+            "Black Pod Rot and Pod Borer recall were 0%. Treat all photo scores as "
+            "research outputs, not reliable disease identification."
+        )
 
-# ---------------- PROCESSING ----------------
-st.subheader("2. Processing")
-with st.spinner("Running detection..."):
+st.markdown('<div class="section-label">01 / Input photograph</div>', unsafe_allow_html=True)
+input_col, preview_col = st.columns([1, 1], gap="large")
+with input_col:
+    source_mode = st.radio("Image source", ["Upload", "Camera"], horizontal=True)
+    if source_mode == "Upload":
+        uploaded = st.file_uploader("Choose a cacao pod photo", type=["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"])
+    else:
+        uploaded = st.camera_input("Take a cacao pod photo")
+
+image = prepared = None
+if uploaded is not None:
     try:
-        model = load_model(model_path)
-        annotated, detections, ms = detect(model, image, conf, iou, stretch)
-    except Exception as e:
-        st.error(f"Inference failed: {type(e).__name__}: {e}")
-        st.stop()
-geom = "stretched to 640x640" if stretch else "letterboxed to 640x640"
-st.write(f"Preprocessing: EXIF orientation corrected, converted to RGB, {geom}, "
-         f"then scaled to [0, 1] by the inference runtime.")
-st.write(f"Model `{Path(model_path).name}` ran in **{ms:.0f} ms** "
-         f"and returned {len(detections)} detection(s) above {conf:.0%} confidence.")
+        image = read_upload(uploaded)
+        prepared, preview = prepare_image(image)
+    except ValueError as exc:
+        st.error(str(exc))
+with preview_col:
+    if image is None:
+        st.info("Upload or capture one clear cacao pod image to preview the model input.")
+    else:
+        st.image(preview, caption="Image after the training-matched 224×224 RGB transform", width="stretch")
+        st.caption(f"Original image: {image.width} × {image.height} pixels")
 
-# ---------------- OUTPUT ----------------
-st.subheader("3. Output")
-if compare:
-    other_path = models[other]
-    with st.spinner("Running the second model..."):
-        annotated2, detections2, ms2 = detect(load_model(other_path), image, conf, iou, stretch)
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown(f"**{choice}**")
-        st.image(annotated, use_container_width=True)
-        st.caption(f"{len(detections)} detections, {ms:.0f} ms")
-    with c2:
-        st.markdown(f"**{other}**")
-        st.image(annotated2, use_container_width=True)
-        st.caption(f"{len(detections2)} detections, {ms2:.0f} ms")
-else:
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("**Input as fed to the model**")
-        st.image(preprocess(image, stretch), use_container_width=True)
-        st.caption("After EXIF correction and resizing. This is what the network sees.")
-    with c2:
-        st.markdown("**Detected**")
-        st.image(annotated, use_container_width=True)
+st.markdown('<div class="method-bar"><span class="method-step">EXIF orientation</span><span class="method-arrow">→</span><span class="method-step">RGB</span><span class="method-arrow">→</span><span class="method-step">bilinear 224 × 224</span><span class="method-arrow">→</span><span class="method-step">divide pixels by 255</span></div>', unsafe_allow_html=True)
 
-summary, present = summarise(detections)
-if detections:
-    st.success(summary)
-else:
-    st.warning("No pods detected above the confidence threshold. Try lowering it in the "
-               "sidebar, or use a clearer photo of the pod.")
+if manifest is None:
+    st.markdown('<div class="warning-note"><strong>Model exports pending.</strong> This classifier runs after the two new ACM notebook weights are exported and connected. No result is shown from the older detector models.</div>', unsafe_allow_html=True)
 
-if detections:
-    with st.expander("Detection details", expanded=False):
-        st.dataframe(
-            [{"#": i + 1,
-              "Class": DISPLAY_NAMES.get(d["class"], d["class"]),
-              "Confidence": f"{d['confidence']:.1%}",
-              "Box (x1, y1, x2, y2)": ", ".join(str(v) for v in d["xyxy"])}
-             for i, d in enumerate(detections)],
-            hide_index=True, use_container_width=True)
+if st.button("Compare models", type="primary", disabled=prepared is None or manifest is None):
+    fingerprint = hashlib.sha256(uploaded.getvalue()).hexdigest()
+    try:
+        with st.spinner("Loading the paired models and classifying the image…"):
+            results = {}
+            for arm in ("baseline", "cbam"):
+                spec = manifest["models"][arm]
+                model_file = resolve_model_file(APP_DIR, arm, spec)
+                runtime = cached_runtime(arm, str(model_file), spec["sha256"])
+                started = time.perf_counter()
+                probabilities = runtime.predict(prepared)
+                results[arm] = {
+                    "probabilities": [float(value) for value in probabilities],
+                    "best_index": int(probabilities.argmax()),
+                    "elapsed_ms": (time.perf_counter() - started) * 1000,
+                }
+        st.session_state["comparison"] = {"fingerprint": fingerprint, "results": results}
+    except (ModelArtifactError, RuntimeError, OSError, ValueError) as exc:
+        st.error(f"Model inference could not complete: {exc}")
 
-    st.markdown("### Recommended action")
-    for cls in present:
-        a = ADVICE.get(cls)
-        if not a:
-            continue
-        with st.container(border=True):
-            st.markdown(f"**{DISPLAY_NAMES.get(cls, cls)}** - {a['status']}")
-            for step in a["actions"]:
-                st.markdown(f"- {step}")
-            st.caption(f"Source: {a['source']}")
+fingerprint = hashlib.sha256(uploaded.getvalue()).hexdigest() if uploaded is not None else None
+saved = st.session_state.get("comparison")
+results = saved["results"] if saved and saved["fingerprint"] == fingerprint else None
+st.markdown('<div class="section-label">02 / Paired predictions</div>', unsafe_allow_html=True)
+left, right = st.columns(2, gap="medium")
+with left:
+    st.markdown(prediction_card("baseline", results["baseline"] if results else None), unsafe_allow_html=True)
+with right:
+    st.markdown(prediction_card("cbam", results["cbam"] if results else None), unsafe_allow_html=True)
 
-    st.caption("This prototype supports field inspection and does not replace diagnosis "
-               "by a qualified agriculturist.")
+if results:
+    baseline_name = CLASS_NAMES[results["baseline"]["best_index"]]
+    cbam_name = CLASS_NAMES[results["cbam"]["best_index"]]
+    if baseline_name == cbam_name:
+        message = f"Both models selected {DISPLAY_NAMES[baseline_name]}. Compare their class scores above."
+    else:
+        message = f"The models disagree: baseline selected {DISPLAY_NAMES[baseline_name]}, while CBAM selected {DISPLAY_NAMES[cbam_name]}."
+    st.markdown(f'<div class="comparison-note">{html.escape(message)}</div>', unsafe_allow_html=True)
+    st.caption("Scores are softmax outputs for one photo. They do not locate symptoms or establish field accuracy.")
 
-# ---------------- HISTORY ----------------
-if "history" not in st.session_state:
-    st.session_state.history = []
+if manifest is not None:
+    st.markdown('<div class="section-label">03 / Held-out study results</div>', unsafe_allow_html=True)
+    metrics = [manifest["models"][arm].get("test_metrics") for arm in ("baseline", "cbam")]
+    if all(isinstance(item, dict) for item in metrics):
+        rows = [{
+            "Model": ARM_LABELS[arm],
+            "Test accuracy": f"{100 * float(item['test_accuracy']):.1f}%",
+            "Test loss": f"{float(item['test_loss']):.4f}",
+            "Macro F1": f"{float(item['macro_f1']):.3f}",
+            "Pod Borer recall": f"{100 * float(item['pod_borer_recall']):.1f}%",
+        } for arm, item in zip(("baseline", "cbam"), metrics)]
+        st.markdown(render_table(rows), unsafe_allow_html=True)
+        st.caption("These values come from the saved Kaggle hold-out evaluations, not this uploaded photo.")
+        with st.expander("Class-level test results"):
+            for arm, item in zip(("baseline", "cbam"), metrics):
+                st.markdown(f"**{ARM_LABELS[arm]}**")
+                class_rows = [{
+                    "Class": DISPLAY_NAMES[row["class"]],
+                    "Test images": int(row["support"]),
+                    "Precision": f"{100 * float(row['precision']):.1f}%",
+                    "Recall / sensitivity": f"{float(row['sensitivity_percent']):.1f}%",
+                    "Specificity": f"{float(row['specificity_percent']):.1f}%",
+                    "F1": f"{float(row['f1_score']):.3f}",
+                } for row in item["class_metrics"]]
+                st.markdown(render_table(class_rows), unsafe_allow_html=True)
+    else:
+        st.caption("Held-out metrics will appear after both Kaggle runs are exported.")
 
-st.session_state.history.insert(0, {
-    "time": datetime.now().strftime("%H:%M:%S"),
-    "model": choice,
-    "detections": len(detections),
-    "result": summary,
-    "ms": round(ms),
-})
-st.session_state.history = st.session_state.history[:20]
-
-with st.expander(f"Scan history ({len(st.session_state.history)})"):
-    st.dataframe(st.session_state.history, hide_index=True, use_container_width=True)
-    st.download_button(
-        "Download history as JSON",
-        json.dumps(st.session_state.history, indent=2),
-        file_name="scan_history.json",
-        mime="application/json")
+st.markdown('<div class="footer-note">Research prototype · Three-class image classification only · Not a field diagnosis or symptom-localization tool.</div>', unsafe_allow_html=True)

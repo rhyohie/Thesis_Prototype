@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "experiment": "ACM paper paired cacao classification",
+  "class_order": [
+    "healthy",
+    "black_pod_rot",
+    "pod_borer"
+  ],
+  "input": {
+    "shape": [
+      1,
+      224,
+      224,
+      3
+    ],
+    "orientation": "exif_transpose",
+    "color": "RGB",
+    "resize": "bilinear",
+    "scale": "divide_by_255"
+  },
+  "models": {
+    "baseline": {
+      "file": "baseline.tflite",
+      "sha256": "fb101bb6a43aa0e3f499050e976c3bb57b34f5ee898d590e964e664aa43a5616",
+      "size_bytes": 262658804,
+      "use_cbam": false,
+      "seed": 42,
+      "split_signature": "4772e07a5e8cb10aea8bc3193d49b0c5f27f6263ef257ae8f0cc10d5b8d69a7b",
+      "completed_epochs": 100,
+      "checkpoint_selection": "final_epoch",
+      "format": "LiteRT/TFLite float16 weight compression, float32 input/output",
+      "conversion_max_abs_difference": 0.0014750957489013672,
+      "test_metrics": {
+        "test_loss": 0.6464067101478577,
+        "test_accuracy": 0.759637176990509,
+        "macro_f1": 0.2878006872852234,
+        "pod_borer_recall": 0.0,
+        "class_metrics": [
+          {
+            "class": "healthy",
+            "support": 335,
+            "TP": 335,
+            "FP": 106,
+            "FN": 0,
+            "TN": 0,
+            "precision": 0.7596371882086168,
+            "recall": 1.0,
+            "f1_score": 0.8634020618556701,
+            "sensitivity_percent": 100.0,
+            "specificity_percent": 0.0
+          },
+          {
+            "class": "black_pod_rot",
+            "support": 95,
+            "TP": 0,
+            "FP": 0,
+            "FN": 95,
+            "TN": 346,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1_score": 0.0,
+            "sensitivity_percent": 0.0,
+            "specificity_percent": 100.0
+          },
+          {
+            "class": "pod_borer",
+            "support": 11,
+            "TP": 0,
+            "FP": 0,
+            "FN": 11,
+            "TN": 430,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1_score": 0.0,
+            "sensitivity_percent": 0.0,
+            "specificity_percent": 100.0
+          }
+        ],
+        "confusion_matrix": [
+          [
+            335,
+            0,
+            0
+          ],
+          [
+            95,
+            0,
+            0
+          ],
+          [
+            11,
+            0,
+            0
+          ]
+        ]
+      }
+    },
+    "cbam": {
+      "file": "cbam.tflite",
+      "sha256": "17d6f9fe46a281ade58828500d087c77e358faa9d33d4e6178428f3724dc92c4",
+      "size_bytes": 262837792,
+      "use_cbam": true,
+      "seed": 42,
+      "split_signature": "4772e07a5e8cb10aea8bc3193d49b0c5f27f6263ef257ae8f0cc10d5b8d69a7b",
+      "completed_epochs": 100,
+      "checkpoint_selection": "final_epoch",
+      "format": "LiteRT/TFLite float16 weight compression, float32 input/output",
+      "conversion_max_abs_difference": 5.40316104888916e-05,
+      "test_metrics": {
+        "test_loss": 0.6319264769554138,
+        "test_accuracy": 0.759637176990509,
+        "macro_f1": 0.2878006872852234,
+        "pod_borer_recall": 0.0,
+        "class_metrics": [
+          {
+            "class": "healthy",
+            "support": 335,
+            "TP": 335,
+            "FP": 106,
+            "FN": 0,
+            "TN": 0,
+            "precision": 0.7596371882086168,
+            "recall": 1.0,
+            "f1_score": 0.8634020618556701,
+            "sensitivity_percent": 100.0,
+            "specificity_percent": 0.0
+          },
+          {
+            "class": "black_pod_rot",
+            "support": 95,
+            "TP": 0,
+            "FP": 0,
+            "FN": 95,
+            "TN": 346,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1_score": 0.0,
+            "sensitivity_percent": 0.0,
+            "specificity_percent": 100.0
+          },
+          {
+            "class": "pod_borer",
+            "support": 11,
+            "TP": 0,
+            "FP": 0,
+            "FN": 11,
+            "TN": 430,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1_score": 0.0,
+            "sensitivity_percent": 0.0,
+            "specificity_percent": 100.0
+          }
+        ],
+        "confusion_matrix": [
+          [
+            335,
+            0,
+            0
+          ],
+          [
+            95,
+            0,
+            0
+          ],
+          [
+            11,
+            0,
+            0
+          ]
+        ]
+      }
+    }
+  }
+}
